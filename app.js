@@ -143,6 +143,7 @@
         <div class="review" hidden>
           <h3>🎧 Revisa tu lectura</h3>
           <p class="rv-audio"></p>
+          <div class="asr-msg" hidden></div>
           <p>Escucha tu grabación y <b>pulsa en el texto las palabras que has leído mal</b> (saltadas, cambiadas o mal pronunciadas). Si te equivocas, vuelve a pulsarla.</p>
           <button type="button" class="btn" data-save>✔️ Guardar este intento</button> <span class="nerr">0 errores</span>
         </div>
@@ -200,6 +201,30 @@
     window.addEventListener('pagehide', () => synth.cancel());
   }
 
+  // Compara las palabras del texto con lo que ha entendido el reconocimiento de voz.
+  // Devuelve los índices de las palabras del texto que no se han leído (saltadas o cambiadas).
+  function compareReading(textWords, heardText) {
+    const nz = w => w.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zñ0-9]/g, '');
+    const T = textWords.map(nz), H = (heardText.match(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9]+/g) || []).map(nz).filter(Boolean);
+    if (H.length < T.length * 0.3) return { ok: false, wrong: [] };
+    const n = T.length, m = H.length;
+    const D = Array.from({ length: n + 1 }, (_, i) => { const r = new Array(m + 1).fill(0); r[0] = i; return r; });
+    for (let j = 0; j <= m; j++) D[0][j] = j;
+    for (let i = 1; i <= n; i++) for (let j = 1; j <= m; j++)
+      D[i][j] = Math.min(D[i - 1][j] + 1, D[i][j - 1] + 1, D[i - 1][j - 1] + (T[i - 1] === H[j - 1] ? 0 : 1));
+    const wrong = []; let i = n, j = m;
+    while (i > 0) {
+      if (j > 0 && D[i][j] === D[i - 1][j - 1] + (T[i - 1] === H[j - 1] ? 0 : 1)) { if (T[i - 1] !== H[j - 1]) wrong.push(i - 1); i--; j--; }
+      else if (D[i][j] === D[i - 1][j] + 1) { wrong.push(i - 1); i--; }
+      else j--;
+    }
+    // Si el alumno paró antes de terminar, las palabras finales no leídas no cuentan como error.
+    let last = n - 1; const set = new Set(wrong);
+    while (last >= 0 && set.has(last)) { set.delete(last); last--; }
+    return { ok: true, wrong: [...set].sort((a, b) => a - b) };
+  }
+  window.__compareReading = compareReading;
+
   function wrapWords(p) {
     return p.replace(/<[^>]+>|([A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9]+)/g, (m, w) => w ? `<span class="w">${w}</span>` : m);
   }
@@ -241,9 +266,47 @@
       recorder.stop();
     });
 
+    // Reconocimiento de voz: 'local' (en el propio ordenador, si Chrome lo permite), 'nube' (Google) o 'no'.
+    const MODO = CFG.reconocimiento || 'local';
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    let asr = null, heard = [], listening = false, asrMode = '';
+    async function asrAvailable() {
+      if (!SR || MODO === 'no') return '';
+      if (typeof SR.available === 'function') {
+        try {
+          const st = await SR.available({ langs: ['es-ES'], processLocally: true });
+          if (st === 'available') return 'local';
+          if ((st === 'downloadable' || st === 'downloading') && typeof SR.install === 'function') {
+            try { if (await SR.install({ langs: ['es-ES'], processLocally: true })) return 'local'; } catch (e) {}
+          }
+        } catch (e) {}
+      }
+      return MODO === 'nube' ? 'nube' : '';
+    }
+    async function startASR() {
+      heard = []; asrMode = await asrAvailable();
+      if (!asrMode) return;
+      try {
+        asr = new SR(); asr.lang = 'es-ES'; asr.continuous = true; asr.interimResults = false; asr.maxAlternatives = 1;
+        if (asrMode === 'local') asr.processLocally = true;
+        asr.onresult = e => { for (let i = e.resultIndex; i < e.results.length; i++) if (e.results[i].isFinal) heard.push(e.results[i][0].transcript); };
+        asr.onerror = () => {};
+        asr.onend = () => { if (listening) { try { asr.start(); } catch (e) {} } };
+        listening = true; asr.start();
+      } catch (e) { asr = null; asrMode = ''; }
+    }
+    const stopASR = () => new Promise(res => {
+      if (!asr) return res(null);
+      listening = false;
+      const done = () => res(heard.join(' '));
+      asr.onend = done; setTimeout(done, 1500);
+      try { asr.stop(); } catch (e) { done(); }
+    });
+
     start.addEventListener('click', async () => {
       start.disabled = true;
       await startRec();
+      await startASR();
       txt.classList.remove('hidden-text'); txt.querySelectorAll('.w.err').forEach(w => w.classList.remove('err'));
       start.hidden = true; start.disabled = false; end.hidden = false; again.hidden = true;
       t0 = Date.now();
@@ -254,9 +317,23 @@
       clearInterval(iv);
       secs = Math.max(1, (Date.now() - t0) / 1000); clock.textContent = fmt(secs);
       end.hidden = true;
-      const url = await stopRec();
+      const [url, oido] = await Promise.all([stopRec(), stopASR()]);
       $('.rv-audio').innerHTML = url ? `<audio controls src="${url}"></audio>` : '<small>No se ha podido grabar (falta permiso para el micrófono). Puedes marcar los errores con ayuda de tu profe o de un compañero.</small>';
-      review.hidden = false; marking = true; txt.classList.add('marking'); nerr.textContent = '0 errores';
+      const spans = [...txt.querySelectorAll('.w')];
+      let msg = '';
+      if (oido !== null && oido !== undefined) {
+        const r = compareReading(spans.map(w => w.textContent), oido);
+        if (r.ok) {
+          r.wrong.forEach(i => spans[i].classList.add('err'));
+          const list = [...new Set(r.wrong.map(i => spans[i].textContent.toLowerCase()))];
+          msg = list.length
+            ? `🤖 <b>He oído ${list.length === 1 ? 'una palabra que no has leído bien' : list.length + ' palabras que no has leído bien'}:</b> ${list.map(w => `<button type="button" class="chip" data-say="${esc(w)}">🔊 ${esc(w)}</button>`).join(' ')}<br><small>Están en rojo en el texto. Escucha tu grabación: si me he equivocado, pulsa la palabra para quitarla; si falta alguna, pulsa para añadirla.</small>`
+            : '🤖 <b>¡No he oído ningún error!</b> <small>Escucha tu grabación por si se me ha escapado algo.</small>';
+        } else msg = '🤖 <small>No he podido entender bien la grabación (¿había ruido o leíste muy bajito?). Marca tú los errores.</small>';
+      } else if (MODO !== 'no') msg = '<small>El reconocimiento automático no está disponible en este ordenador. Marca tú los errores escuchando la grabación.</small>';
+      $('.asr-msg').innerHTML = msg; $('.asr-msg').hidden = !msg;
+      review.hidden = false; marking = true; txt.classList.add('marking');
+      const n0 = txt.querySelectorAll('.w.err').length; nerr.textContent = n0 + (n0 === 1 ? ' error' : ' errores');
       review.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
 
@@ -296,6 +373,7 @@
       form.querySelector('.timer').scrollIntoView({ behavior: 'smooth' });
     });
     $('.pw').addEventListener('click', e => { const b = e.target.closest('[data-say]'); if (b) speak(b.dataset.say, 0.7); });
+    $('.asr-msg').addEventListener('click', e => { const b = e.target.closest('[data-say]'); if (b) speak(b.dataset.say, 0.7); });
     window.addEventListener('pagehide', () => { if (stream) stream.getTracks().forEach(t => t.stop()); });
   }
 
