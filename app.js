@@ -20,7 +20,7 @@
   const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
   const norm = s => String(s).trim().toLowerCase().replace(/[.!?¡¿,;:"«»]/g, '').replace(/\s+/g, ' ');
   const words = s => (String(s).replace(/<[^>]+>/g, ' ').match(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9]+/g) || []).length;
-  const getJSON = u => fetch(u).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
+  const getJSON = u => fetch(u, { cache: 'no-cache' }).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
   const markDone = (key, n) => { const s = new Set(store.get('done:' + key) || []); s.add(n); store.set('done:' + key, [...s]); };
 
   const ACTIVIDADES = [
