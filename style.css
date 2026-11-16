@@ -116,3 +116,4 @@ table.attempts th{background:#f3f5fa}table.attempts tr.best td{background:#e3f4e
 .foto svg.fig,.foto svg.fig.sm{display:none}.foto.off img{display:none}.foto.off svg.fig.sm{display:block;margin:0}
 .figs{gap:14px}.figs .foto{flex:1 1 280px;max-width:480px;margin:0}
 .foto.cuadrada{max-width:360px}.foto.cuadrada img{aspect-ratio:1}
+.fig.mov{max-width:360px;width:100%;height:auto;margin:10px 0 6px;border-radius:12px}.figs .fig.mov{flex:1 1 220px;margin:0}
