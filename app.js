@@ -32,7 +32,9 @@
     { slug: 'palabras', titulo: 'Trabajo con palabras', ico: '🔤', color: '#0b8577', sub: 'Gramática y ortografía', href: '?p=palabras' }
   ];
   const LEVELS = { A1: 'A1 · Novice', A2: 'A2 · Intermediate Low', B1: 'B1 · Intermediate Mid–High', B2: 'B2 · Advanced', C1: 'C1', C2: 'C2' };
-  const HOME = '<a class="back" href="./">← Volver a Seis actividades diarias</a>';
+  const HOME = '<a class="back" href="./">← Inicio</a>';
+  const SUBJ = slug => /^fichas-(espanol)/.test(slug) ? ['Español', '#d62828'] : /^fichas-mates/.test(slug) ? ['Matemáticas', '#1d6fd6'] : /^fichas-/.test(slug) ? ['Ciencias', '#1f8a44'] : ['Seis actividades diarias', '#d9730d'];
+  const hecho = (slug) => store.get('done:' + slug) || [];
 
   const fail = () => { app.innerHTML = HOME + '<p>Esta actividad todavía no está lista. ¡Pronto!</p>'; };
   if (ACT) getJSON('data/act/' + encodeURIComponent(ACT) + '.json').then(d => I ? actItem(d, +I) : actList(d)).catch(fail);
@@ -42,11 +44,47 @@
 
   /* ---------- panel principal ---------- */
   function home() {
-    document.title = 'Seis actividades diarias';
+    document.title = 'Clase de español · 5.º DLI';
+    const tab = ses.get('tab') || 'Español';
     app.innerHTML = `
-      <div class="banner" style="background:#1d6fd6"><h1>🗓️ Seis actividades diarias</h1>
-      <p>Cada día elegimos una actividad para practicar español a nuestro ritmo. Pulsa una tarjeta.</p></div>
-      <div class="grid big">${ACTIVIDADES.map(a => `<a class="card" style="--c:${a.color}" href="${a.href || '?a=' + a.slug}"><span class="ico">${a.ico}</span><strong>${a.titulo}</strong><small>${a.sub}</small></a>`).join('')}</div>`;
+      <header class="hub-top">
+        <p class="marca">Clase de español de 5.º en Discovery Elementary</p>
+        <h1 class="hub-h1">¿Qué toca hoy?</h1>
+        <label class="buscar"><span class="sr">Buscar una ficha</span><input type="search" id="q" placeholder="Busca una ficha: fracciones, volcanes, Navidad…" autocomplete="off"></label>
+      </header>
+      <section class="diarias" aria-labelledby="h-diarias">
+        <h2 id="h-diarias">Seis actividades diarias</h2>
+        <div class="lapices">${ACTIVIDADES.map(a => `<a class="lapiz" style="--c:${a.color}" href="${a.href || '?a=' + a.slug}"><span class="ico" aria-hidden="true">${a.ico}</span><b>${a.titulo}</b><small>${a.sub}</small></a>`).join('')}</div>
+      </section>
+      <section class="fichero" aria-labelledby="h-fichas">
+        <h2 id="h-fichas">Fichas</h2>
+        <div class="pestanas" role="tablist"></div>
+        <div class="hoja" id="hoja"><p class="cargando">Cargando…</p></div>
+      </section>`;
+    getJSON('data/indice.json').then(ix => {
+      const color = { 'Español': '#d62828', 'Ciencias': '#1f8a44', 'Matemáticas': '#1d6fd6' };
+      const tabs = app.querySelector('.pestanas'), hoja = app.querySelector('#hoja'), q = app.querySelector('#q');
+      tabs.innerHTML = ix.asignaturas.map(a => `<button type="button" role="tab" class="pestana" style="--c:${color[a.nombre]}" data-t="${a.nombre}" aria-selected="${a.nombre === tab}">${a.nombre}<small>${a.colecciones.reduce((x, c) => x + c.n, 0)}</small></button>`).join('');
+      const pinta = (nombre) => {
+        const a = ix.asignaturas.find(x => x.nombre === nombre) || ix.asignaturas[0];
+        hoja.style.setProperty('--c', color[a.nombre]);
+        tabs.querySelectorAll('.pestana').forEach(b => b.setAttribute('aria-selected', b.dataset.t === a.nombre));
+        hoja.innerHTML = `<ol class="indice">${a.colecciones.map(c => { const h = hecho(c.slug).length; return `<li><a href="?a=${c.slug}"><span class="ico" aria-hidden="true">${c.ico}</span><span class="tit">${esc(c.titulo)}</span><span class="pts" aria-hidden="true"></span><span class="num">${c.n} fichas</span></a>${c.grupos.length ? `<p class="temas">${c.grupos.map(esc).join(', ')}${c.grupos.length >= 6 ? '…' : ''}</p>` : ''}${h ? `<p class="hechas">✓ ${h} hechas</p>` : ''}</li>`; }).join('')}</ol>`;
+      };
+      tabs.addEventListener('click', e => { const b = e.target.closest('.pestana'); if (!b) return; ses.set('tab', b.dataset.t); q.value = ''; pinta(b.dataset.t); });
+      pinta(tab);
+      const todas = ix.asignaturas.flatMap(a => a.colecciones.flatMap(c => c.fichas.map((t, i) => ({ t, i: i + 1, c, a: a.nombre }))));
+      const llano = s => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+      q.addEventListener('input', () => {
+        const v = llano(q.value.trim());
+        if (v.length < 2) return pinta(ses.get('tab') || 'Español');
+        let r = todas.filter(x => llano(x.t).includes(v)); if (!r.length) r = todas.filter(x => llano(x.c.titulo).includes(v)); r = r.slice(0, 60);
+        hoja.style.setProperty('--c', '#1e2a45');
+        tabs.querySelectorAll('.pestana').forEach(b => b.setAttribute('aria-selected', 'false'));
+        hoja.innerHTML = r.length ? `<p class="resumen">${r.length === 60 ? 'Más de 60' : r.length} ${r.length === 1 ? 'ficha' : 'fichas'} con «${esc(q.value.trim())}»</p><ol class="indice compacto">${r.map(x => `<li style="--c:${color[x.a]}"><a href="?a=${x.c.slug}&i=${x.i}"><span class="tit">${esc(x.t)}</span><span class="pts" aria-hidden="true"></span><span class="num">${esc(x.c.titulo)}</span></a></li>`).join('')}</ol>`
+          : `<p class="resumen">No hay ninguna ficha con «${esc(q.value.trim())}». Prueba con otra palabra, por ejemplo «planta» o «sumas».</p>`;
+      });
+    }).catch(() => { app.querySelector('#hoja').innerHTML = '<p class="resumen">No se ha podido cargar el índice. Recarga la página.</p>'; });
   }
 
   /* ---------- Trabajo con palabras ---------- */
@@ -104,17 +142,23 @@
   /* ---------- actividades diarias ---------- */
   function actList(d) {
     document.title = d.titulo;
-    const done = store.get('done:' + d.slug) || [];
+    const done = hecho(d.slug), [asig, col] = SUBJ(d.slug);
+    const grupos = groupByLevel(d.items);
     app.innerHTML = `${HOME}
-      <div class="banner" style="background:${d.color}"><h1>${d.ico} ${d.titulo}</h1><p>${d.intro}</p></div>
-      <div class="rules"><h2>📌 Cómo se hace</h2><div class="rules-grid">${d.pasos.map(([n, t]) => `<div class="rule"><b>${n}</b>${t}</div>`).join('')}</div></div>
-      ${groupByLevel(d.items).map(([nivel, list]) => `<h2 class="group">${nivel} <small class="sub">· ${list.length} ${list.length === 1 ? 'actividad' : 'actividades'}</small></h2>
-      <div class="grid">${list.map(([it, k]) => `<a class="card" style="--c:${d.color}" href="?a=${d.slug}&i=${k + 1}"><small>${k + 1}</small><strong>${it.titulo}</strong>${done.includes(k + 1) ? '<span class="badge done">✓ Hecho</span>' : ''}</a>`).join('')}</div>`).join('')}`;
+      <header class="cabecera" style="--c:${col}"><p class="marca">${asig}</p><h1>${d.ico} ${esc(d.titulo.replace(/^Fichas · /, ''))}</h1><p>${d.intro}</p>
+        <p class="cifras">${d.items.length} ${d.items.length === 1 ? 'ficha' : 'fichas'}${done.length ? ` · ✓ ${done.length} hechas` : ''}</p></header>
+      ${d.items.length > 12 ? `<label class="buscar filtro"><span class="sr">Filtrar</span><input type="search" id="f" placeholder="Filtra por título…" autocomplete="off"></label>` : ''}
+      <div class="hoja" style="--c:${col}">
+        ${grupos.map(([g, list]) => `<section class="grupo"><h2>${esc(g)}</h2><ol class="indice">${list.map(([it, k]) => `<li data-t="${esc(it.titulo.toLowerCase())}"><a href="?a=${d.slug}&i=${k + 1}"><span class="n">${k + 1}</span><span class="tit">${esc(it.titulo)}</span><span class="pts" aria-hidden="true"></span><span class="num">${done.includes(k + 1) ? '<b class="ok">✓ Hecha</b>' : esc(it.nivel && it.nivel !== g ? it.nivel : '')}</span></a></li>`).join('')}</ol></section>`).join('')}
+      </div>
+      <details class="como"><summary>Cómo se hace</summary><ol>${d.pasos.map(([, t]) => `<li>${t}</li>`).join('')}</ol></details>`;
+    const f = app.querySelector('#f');
+    if (f) f.addEventListener('input', () => { const v = f.value.trim().toLowerCase(); app.querySelectorAll('.hoja li').forEach(li => li.hidden = v && !li.dataset.t.includes(v)); app.querySelectorAll('.grupo').forEach(g => g.hidden = ![...g.querySelectorAll('li')].some(li => !li.hidden)); });
   }
 
   function groupByLevel(items) {
     const g = [];
-    items.forEach((it, k) => { let last = g[g.length - 1]; if (!last || last[0] !== it.nivel) g.push(last = [it.nivel, []]); last[1].push([it, k]); });
+    items.forEach((it, k) => { const key = it.grupo || it.nivel; let last = g.find(x => x[0] === key); if (!last) g.push(last = [key, []]); last[1].push([it, k]); });
     return g;
   }
 
@@ -159,16 +203,16 @@
         <textarea name="texto" rows="10" spellcheck="true" lang="es" placeholder="Escribe aquí tu texto…"></textarea>
         <div class="wc"><span class="count">0 palabras</span> · mínimo ${w.min}</div>
         <details class="checklist" open><summary>✅ Lista de comprobación</summary><ul>${w.lista.map(l => `<li><label><input type="checkbox"> ${l}</label></li>`).join('')}</ul></details></div>` : '';
-    const qTitle = modo === 'escritura' ? '🔥 Calentamiento' : '❓ Las preguntas';
+    const qTitle = modo === 'escritura' ? 'Calentamiento' : 'Las preguntas';
     app.innerHTML = `
-      <a class="back" href="?a=${d.slug}">← Volver a ${d.titulo}</a>
-      <div class="banner" style="background:${d.color}"><h1>${d.ico} ${it.titulo}</h1><p>${it.nivel} · ${d.titulo}</p></div>
-      <form class="player" style="--c:${d.color}" autocomplete="off">
+      <a class="back" href="?a=${d.slug}">← ${esc(d.titulo.replace(/^Fichas · /, ''))}</a>
+      <header class="cabecera ficha" style="--c:${SUBJ(d.slug)[1]}"><p class="marca">${d.items.length > 1 ? `Ficha ${n} de ${d.items.length}` : ''}${it.grupo || it.nivel ? `${d.items.length > 1 ? ', ' : ''}${esc((it.grupo || it.nivel).replace(/^\d+\.\s*/, ''))}` : ''}</p><h1>${esc(it.titulo)}</h1></header>
+      <form class="player" style="--c:${SUBJ(d.slug)[1]}" autocomplete="off">
         ${codeBox(modo === 'pareja')}
         ${top}
         <div class="qwrap"${modo === 'cronometro' ? ' hidden' : ''}><h2 class="group">${qTitle}</h2>${questionsHTML(qs)}</div>
         ${writeHTML}
-        ${actionsHTML(w ? '📨 Comprobar y enviar' : '✅ Comprobar')}
+        ${actionsHTML(w ? 'Comprobar y enviar' : 'Comprobar')}
       </form>`;
     const form = app.querySelector('form');
     const ctx = {
@@ -398,9 +442,14 @@
       <small>Tu profe verá tu nota con este código.</small></div>`;
   }
   const questionsHTML = qs => qs.map((x, k) => `<div class="q" data-k="${k}"><span class="num">${k + 1}.</span>${x[1]}${widget(x, k)}<div class="fb"></div></div>`).join('');
-  const actionsHTML = (label = '✅ Comprobar') => `<div class="actions"><button class="btn" type="submit">${label}</button><span class="score"></span></div>`;
+  const actionsHTML = (label = 'Comprobar') => `<div class="actions"><span class="progreso" aria-live="polite"></span><button class="btn" type="submit">${label}</button><span class="score"></span></div>`;
 
   function wire(form, qs, ctx) {
+    const prog = form.querySelector('.progreso');
+    const contestada = el => el.querySelector('.opt.sel, .built .tile, .ws span.hit') || [...el.querySelectorAll('input.txt, select, .cw input')].some(i => i.value.trim());
+    const cuenta = () => { if (!prog || form.classList.contains('checked')) return; const qsEl = [...form.querySelectorAll('.q')]; const n = qsEl.filter(contestada).length; prog.innerHTML = `<b>${n}</b> de ${qsEl.length} respondidas<span class="barra"><i style="width:${qsEl.length ? n / qsEl.length * 100 : 0}%"></i></span>`; };
+    ['click', 'input', 'change'].forEach(ev => form.addEventListener(ev, () => setTimeout(cuenta, 0)));
+    cuenta();
     form.addEventListener('click', e => {
       const say = e.target.closest('.dict [data-say]');
       if (say) { e.preventDefault(); speak(say.dataset.say, +(say.dataset.rate || 0.85)); return; }
@@ -447,7 +496,7 @@
         const k = +el.dataset.k, r = grade(qs[k], el); if (r) ok++; el.classList.add('done');
         const inp = el.querySelector('input.txt'); detalle.push((k + 1) + (r ? '✓' : '✗') + (inp && !r ? '(' + inp.value.trim() + ')' : ''));
       });
-      form.classList.add('checked');
+      form.classList.add('checked'); if (prog) prog.remove();
       form.querySelectorAll('[data-again],[data-start]').forEach(b => b.disabled = true);
       form.querySelectorAll('.hidden-text').forEach(t => t.classList.remove('hidden-text'));
       if (window.speechSynthesis) speechSynthesis.cancel();
