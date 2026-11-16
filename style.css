@@ -106,3 +106,7 @@ table.attempts th{background:#f3f5fa}table.attempts tr.best td{background:#e3f4e
 .clues{min-width:220px;flex:1}.clues h4{margin:6px 0 4px}.clues ul{margin:0;padding-left:0;list-style:none}.clues li{margin:3px 0}
 .fig{display:block;max-width:100%;height:auto;margin:8px auto}
 @media (max-width:600px){.cw{grid-template-columns:repeat(var(--cols),24px)}.cell,.cell input{width:24px;height:24px}}
+.fig.sm{display:inline-block;max-width:260px;width:100%;border-radius:12px;margin:8px 6px 4px 0;vertical-align:top}
+.figs{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0}.figs .fig.sm{margin:0}
+.q .fig{border-radius:10px}
+.q > svg.fig.sm{display:block;margin:10px 0 6px}
