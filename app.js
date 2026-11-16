@@ -123,9 +123,10 @@
     if (!it) { location.search = '?a=' + d.slug; return; }
     document.title = it.titulo;
     const qs = it.preguntas, modo = d.modo;
-    const textHTML = `<div class="texto">${it.texto.map(p => `<p>${p}</p>`).join('')}</div>`;
+    const textHTML = `<div class="texto">${(it.texto || []).map(p => `<p>${p}</p>`).join('')}</div>`;
     let top = '';
     if (modo === 'lectura' || modo === 'pareja') top = `<h2 class="group">📄 La lectura</h2>${textHTML}`;
+    if (modo === 'ficha' && it.texto && it.texto.length) top = textHTML;
     if (modo === 'escritura') top = `<h2 class="group">📄 El modelo</h2>${textHTML}`;
     if (modo === 'audio') top = `<div class="audio">
         <button type="button" class="btn" data-play="1">▶️ Escuchar</button>
@@ -408,6 +409,8 @@
         e.preventDefault(); const box = tile.closest('.order');
         (tile.parentElement.classList.contains('tiles') ? box.querySelector('.built') : box.querySelector('.tiles')).appendChild(tile); return;
       }
+      const wsCell = e.target.closest('.ws span');
+      if (wsCell && !form.classList.contains('checked')) { e.preventDefault(); wsClick(wsCell); return; }
       const rs = e.target.closest('.order [data-reset]');
       if (rs && !form.classList.contains('checked')) { e.preventDefault(); const box = rs.closest('.order'); box.querySelectorAll('.built .tile').forEach(t => box.querySelector('.tiles').appendChild(t)); return; }
       const b = e.target.closest('.opt'); if (!b || form.classList.contains('checked')) return;
@@ -415,6 +418,12 @@
       const box = b.parentElement;
       if (box.dataset.multi) b.classList.toggle('sel');
       else { box.querySelectorAll('.opt').forEach(o => o.classList.remove('sel')); b.classList.add('sel'); }
+    });
+    form.addEventListener('input', e => {
+      const inp = e.target.closest('.cw input'); if (!inp || !inp.value) return;
+      inp.value = inp.value.toUpperCase();
+      const all = [...inp.closest('.cw').querySelectorAll('input')], i = all.indexOf(inp);
+      if (all[i + 1]) all[i + 1].focus();
     });
     form.addEventListener('submit', e => {
       e.preventDefault();
@@ -469,6 +478,83 @@
     });
   }
 
+  // ---------- Sopa de letras y crucigrama ----------
+  const plainUp = w => String(w).toUpperCase().replace(/Ñ/g, '\u0001').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\u0001/g, 'Ñ').replace(/[^A-ZÑ]/g, '');
+  function seeded(str) { let h = 2166136261; for (const c of str) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return () => ((h = Math.imul(h ^ (h >>> 15), 2246822507) ^ Math.imul(h ^ (h >>> 13), 3266489909)) >>> 0) / 4294967296; }
+  function wordSearchHTML(list, opt) {
+    const words = list.map(plainUp), rnd = seeded(words.join());
+    const n = opt.n || Math.max(10, Math.max(...words.map(w => w.length)) + 2);
+    const dirs = opt.dirs || [[0, 1], [1, 0], [1, 1]];
+    const g = Array.from({ length: n }, () => Array(n).fill(''));
+    const placed = [];
+    for (const w of words.slice().sort((a, b) => b.length - a.length)) {
+      let done = false;
+      for (let t = 0; t < 400 && !done; t++) {
+        const [dr, dc] = dirs[Math.floor(rnd() * dirs.length)];
+        const r0 = Math.floor(rnd() * n), c0 = Math.floor(rnd() * n);
+        const r1 = r0 + dr * (w.length - 1), c1 = c0 + dc * (w.length - 1);
+        if (r1 < 0 || r1 >= n || c1 < 0 || c1 >= n) continue;
+        let okp = true;
+        for (let i = 0; i < w.length; i++) { const ch = g[r0 + dr * i][c0 + dc * i]; if (ch && ch !== w[i]) { okp = false; break; } }
+        if (!okp) continue;
+        for (let i = 0; i < w.length; i++) g[r0 + dr * i][c0 + dc * i] = w[i];
+        placed.push(w); done = true;
+      }
+    }
+    const AB = 'ABCDEFGHIJLMNÑOPRSTUVZ';
+    for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (!g[r][c]) g[r][c] = AB[Math.floor(rnd() * AB.length)];
+    return `<div class="wsbox"><div class="ws" style="--n:${n}" data-words="${esc(placed.join(','))}">${g.map((row, r) => row.map((ch, c) => `<span data-r="${r}" data-c="${c}">${ch}</span>`).join('')).join('')}</div>
+      <ul class="ws-words">${list.filter((w, i) => placed.includes(words[i])).map((w, i) => `<li data-w="${esc(plainUp(w))}">${esc(w)}</li>`).join('')}</ul></div>
+      <small class="mu">Pulsa la primera y la última letra de cada palabra.</small>`;
+  }
+  function wsClick(cell) {
+    const ws = cell.closest('.ws'); if (ws.classList.contains('locked')) return;
+    const start = ws.querySelector('.start');
+    if (!start) { cell.classList.add('start'); return; }
+    start.classList.remove('start');
+    const r0 = +start.dataset.r, c0 = +start.dataset.c, r1 = +cell.dataset.r, c1 = +cell.dataset.c;
+    const dr = Math.sign(r1 - r0), dc = Math.sign(c1 - c0), len = Math.max(Math.abs(r1 - r0), Math.abs(c1 - c0)) + 1;
+    if (!(r0 === r1 || c0 === c1 || Math.abs(r1 - r0) === Math.abs(c1 - c0))) return;
+    const cells = []; for (let i = 0; i < len; i++) cells.push(ws.querySelector(`[data-r="${r0 + dr * i}"][data-c="${c0 + dc * i}"]`));
+    const w = cells.map(c => c.textContent).join(''), wr = w.split('').reverse().join('');
+    const li = [...ws.parentElement.querySelectorAll('.ws-words li:not(.found)')].find(l => l.dataset.w === w || l.dataset.w === wr);
+    if (li) { li.classList.add('found'); cells.forEach(c => c.classList.add('hit')); }
+  }
+  function crosswordHTML(pairs) {
+    const items = pairs.map(([a, clue]) => ({ w: plainUp(a), clue })).sort((x, y) => y.w.length - x.w.length);
+    const grid = new Map(), key = (r, c) => r + ',' + c, put = [];
+    const can = (w, r, c, dir) => {
+      for (let i = -1; i <= w.length; i++) {
+        const rr = r + (dir ? i : 0), cc = c + (dir ? 0 : i), ch = grid.get(key(rr, cc));
+        if (i === -1 || i === w.length) { if (ch) return false; continue; }
+        if (ch && ch !== w[i]) return false;
+        if (!ch) { const n1 = grid.get(key(rr + (dir ? 0 : 1), cc + (dir ? 1 : 0))), n2 = grid.get(key(rr - (dir ? 0 : 1), cc - (dir ? 1 : 0))); if (n1 || n2) return false; }
+      }
+      return true;
+    };
+    const place = (it, r, c, dir) => { for (let i = 0; i < it.w.length; i++) grid.set(key(r + (dir ? i : 0), c + (dir ? 0 : i)), it.w[i]); put.push(Object.assign(it, { r, c, dir })); };
+    items.forEach((it, idx) => {
+      if (!idx) return place(it, 0, 0, 0);
+      for (const p of put) for (let i = 0; i < p.w.length; i++) for (let j = 0; j < it.w.length; j++) {
+        if (it.placed || p.w[i] !== it.w[j]) continue;
+        const dir = p.dir ? 0 : 1, r = p.r + (p.dir ? i : 0) - (dir ? j : 0), c = p.c + (p.dir ? 0 : i) - (dir ? 0 : j);
+        if (can(it.w, r, c, dir)) { place(it, r, c, dir); it.placed = true; }
+      }
+      if (!it.placed) { const maxR = Math.max(...[...grid.keys()].map(k => +k.split(',')[0])); place(it, maxR + 2, 0, 0); }
+    });
+    const rs = [...grid.keys()].map(k => +k.split(',')[0]), cs = [...grid.keys()].map(k => +k.split(',')[1]);
+    const r0 = Math.min(...rs), c0 = Math.min(...cs), R = Math.max(...rs) - r0 + 1, C = Math.max(...cs) - c0 + 1;
+    const starts = new Map(); let num = 0;
+    put.slice().sort((a, b) => a.r - b.r || a.c - b.c).forEach(p => { const k = key(p.r, p.c); if (!starts.has(k)) starts.set(k, ++num); p.n = starts.get(k); });
+    let cells = '';
+    for (let r = 0; r < R; r++) for (let c = 0; c < C; c++) {
+      const ch = grid.get(key(r + r0, c + c0)), n = starts.get(key(r + r0, c + c0));
+      cells += ch ? `<label class="cell">${n ? `<i>${n}</i>` : ''}<input maxlength="1" data-a="${ch}" autocomplete="off" autocapitalize="characters"></label>` : '<span class="cell empty"></span>';
+    }
+    const list = d => put.filter(p => p.dir === d).sort((a, b) => a.n - b.n).map(p => `<li><b>${p.n}.</b> ${p.clue} <small>(${p.w.length})</small></li>`).join('');
+    return `<div class="cwbox"><div class="cw" style="--cols:${C}">${cells}</div><div class="clues"><h4>➡️ Horizontales</h4><ul>${list(0)}</ul><h4>⬇️ Verticales</h4><ul>${list(1)}</ul></div></div>`;
+  }
+
   function widget(x, k) {
     const [ty, , ans] = x;
     if (ty === 'm' || ty === 'a')
@@ -480,6 +566,15 @@
       const tiles = shuffle(ans[0][0].replace(/[.!?¡¿,]/g, '').split(/\s+/).filter(Boolean));
       return `<div class="order"><div class="built" aria-live="polite"></div><div class="tiles">${tiles.map(t => `<button type="button" class="tile">${esc(t)}</button>`).join('')}</div><button type="button" class="btn alt sm" data-reset>↩️ Borrar</button></div>`;
     }
+    if (ty === 'g') { // texto con huecos: {{opción|correcta*|opción}}
+      let n = 0;
+      return `<div class="gap">${String(x[4]).replace(/\{\{([^}]+)\}\}/g, (m, body) => {
+        const opts = body.split('|').map(o => o.replace(/\*$/, ''));
+        return `<select data-g="${n++}"><option value="">…</option>${shuffle(opts).map(o => `<option>${esc(o)}</option>`).join('')}</select>`;
+      })}</div>`;
+    }
+    if (ty === 'w') return wordSearchHTML(ans.map(a => a[0]), x[4] || {});
+    if (ty === 'c') return crosswordHTML(ans);
     if (ty === 'x') {
       const rights = shuffle([...new Set(ans.map(a => a[1]))]);
       return `<div class="match">${ans.map((a, i) => `<span>${a[0]}</span><select data-i="${i}"><option value="">— elige —</option>${rights.map(r => `<option>${esc(r)}</option>`).join('')}</select>`).join('')}</div>`;
@@ -505,6 +600,20 @@
       ok = ans.some(a => norm(a[0]) === v); built.classList.add(ok ? 'right' : 'wrong');
       el.querySelectorAll('.order button').forEach(b => b.disabled = true);
       sol = ans[0][0];
+    } else if (ty === 'g') {
+      const right = [...String(x[4]).matchAll(/\{\{([^}]+)\}\}/g)].map(m => m[1].split('|').find(o => /\*$/.test(o)).replace(/\*$/, ''));
+      ok = true;
+      el.querySelectorAll('.gap select').forEach(sel => { const r = sel.value === right[+sel.dataset.g]; sel.classList.add(r ? 'right' : 'wrong'); sel.disabled = true; if (!r) ok = false; });
+      sol = right.join(' · ');
+    } else if (ty === 'w') {
+      const total = el.querySelectorAll('.ws-words li').length, found = el.querySelectorAll('.ws-words li.found').length;
+      ok = found === total; sol = ans.map(a => a[0]).join(', ');
+      el.querySelectorAll('.ws-words li:not(.found)').forEach(li => li.classList.add('missing'));
+      el.querySelector('.ws').classList.add('locked');
+    } else if (ty === 'c') {
+      ok = true;
+      el.querySelectorAll('.cw input').forEach(i => { const r = plainUp(i.value) === i.dataset.a; i.classList.add(r ? 'right' : 'wrong'); i.disabled = true; if (!r) ok = false; });
+      sol = ans.map(a => a[0]).join(', ');
     } else if (ty === 'x') {
       ok = true;
       el.querySelectorAll('select').forEach(s => { const r = s.value === ans[+s.dataset.i][1]; s.classList.add(r ? 'right' : 'wrong'); s.disabled = true; if (!r) ok = false; });
