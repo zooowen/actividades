@@ -17,6 +17,11 @@
  *  - Por corregir: textos de escritura que todavía no tienen «Nota del profe».
  *  - Mejor nota: mejor nota, intentos y mejor velocidad lectora (palabras correctas por minuto) por alumno y ejercicio.
  *  - Códigos: lista de códigos válidos.
+ *  - 📊 Panel: resumen visual (niveles, gráficas y tabla por alumno). Se crea con la función «actualizarPanel»
+ *    y después se actualiza solo cada vez que abres la hoja (o con el menú 📊 Panel → Actualizar el panel).
+ *  - 🧩 Mapa: nota media de cada alumno en cada actividad, con colores.
+ *  - ➗ Panel mates y ➗ Resultados mates: lo mismo, solo con las actividades de matemáticas
+ *    (fichas de refuerzo, Reto de multiplicar y Taller de divisiones). El panel general no las incluye.
  *
  * Panel del profesor: abre la URL /exec terminada en ?panel=1 (solo funciona con tu cuenta).
  */
@@ -197,6 +202,248 @@ function todo(){let f=D.filas.filter(r=>(!F.act||r.actividad===F.act)&&(!F.tema|
  document.querySelectorAll('th[data-k]').forEach(t=>t.onclick=()=>{SORT={k:t.dataset.k,d:SORT.k===t.dataset.k?-SORT.d:1};render()})}
 load();
 </script></body></html>`;
+
+// ---------- Panel visual dentro de la hoja ----------
+const HOJA_PANEL = '📊 Panel';
+const HOJA_MAPA = '🧩 Mapa';
+const HOJA_DATOS = 'Datos del panel';
+const HOJA_PANEL_MATES = '➗ Panel mates';
+const HOJA_RES_MATES = '➗ Resultados mates';
+// Una actividad es de matemáticas si su nombre contiene alguna de estas palabras.
+const ES_MATES = /matem|multiplic|divisi/i;
+const NIVELES = [
+  { n: '⭐ Avanzado', min: 90, fondo: '#cfe5ff', color: '#1d6fd6' },
+  { n: '🟢 Conseguido', min: 80, fondo: '#d7f0dc', color: '#2a9d3f' },
+  { n: '🟡 En proceso', min: 60, fondo: '#fff1c2', color: '#d99a00' },
+  { n: '🔴 Necesita apoyo', min: 0, fondo: '#fbd5d5', color: '#d62828' }
+];
+const SIN_ACTIVIDAD = { n: '⚪ Sin actividad', fondo: '#eceff4', color: '#b8bfcc' };
+
+function onOpen() {
+  SpreadsheetApp.getUi().createMenu('📊 Panel').addItem('Actualizar el panel', 'actualizarPanel').addToUi();
+  try { actualizarPanel(); } catch (e) {}
+}
+
+function nivelDe_(nota) {
+  if (nota === '' || nota == null) return SIN_ACTIVIDAD;
+  for (let i = 0; i < NIVELES.length; i++) if (nota >= NIVELES[i].min) return NIVELES[i];
+  return NIVELES[NIVELES.length - 1];
+}
+
+function media_(a) { return a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length) : ''; }
+
+// Hace todas las cuentas. «dia» convierte una fecha en texto aaaa-mm-dd.
+function calculaPanel_(filas, codigos, ahora, dia) {
+  const nuevo = () => ({ intentos: 0, semana: 0, mejor: {}, ppm: '', ultimo: '', porCorregir: 0 });
+  const al = {}, orden = [];
+  codigos.forEach(c => { if (!al[c]) { al[c] = nuevo(); orden.push(c); } });
+  const hace7 = ahora.getTime() - 7 * 864e5, porDia = {}, intentosAct = {};
+  let porCorregir = 0;
+  filas.forEach(f => {
+    const cod = limpiaCodigo(f[1]);
+    if (!cod) return;
+    if (!al[cod]) { al[cod] = nuevo(); orden.push(cod); }
+    const a = al[cod], nota = Number(f[8]) || 0, act = String(f[2] || 'Sin nombre');
+    const fecha = f[0] instanceof Date ? f[0] : new Date(f[0]);
+    const clave = [f[2], f[3], f[4], f[5]].join('|');
+    a.intentos++;
+    intentosAct[act] = (intentosAct[act] || 0) + 1;
+    if (!a.mejor[clave] || nota > a.mejor[clave].nota) a.mejor[clave] = { nota: nota, act: act };
+    if (Number(f[10]) && (a.ppm === '' || Number(f[10]) > a.ppm)) a.ppm = Number(f[10]);
+    if (String(f[13] || '') !== '' && String(f[15]) === '') { a.porCorregir++; porCorregir++; }
+    if (!isNaN(fecha.getTime())) {
+      if (fecha.getTime() >= hace7) a.semana++;
+      if (a.ultimo === '' || fecha > a.ultimo) a.ultimo = fecha;
+      const k = dia(fecha);
+      porDia[k] = (porDia[k] || 0) + 1;
+    }
+  });
+  const acts = Object.keys(intentosAct).sort(), notasAct = {};
+  acts.forEach(x => notasAct[x] = []);
+  const alumnos = orden.map(c => {
+    const a = al[c], mejores = Object.keys(a.mejor).map(k => a.mejor[k]), porAct = {};
+    mejores.forEach(m => { (porAct[m.act] = porAct[m.act] || []).push(m.nota); notasAct[m.act].push(m.nota); });
+    const mediasAct = {};
+    Object.keys(porAct).forEach(x => mediasAct[x] = media_(porAct[x]));
+    const nota = media_(mejores.map(m => m.nota));
+    return { codigo: c, nota: nota, nivel: nivelDe_(nota), intentos: a.intentos, ejercicios: mejores.length,
+      superados: mejores.filter(m => m.nota >= 80).length, semana: a.semana, ppm: a.ppm, ultimo: a.ultimo,
+      porCorregir: a.porCorregir, porAct: mediasAct };
+  });
+  const dias = [];
+  for (let i = 13; i >= 0; i--) {
+    const d = new Date(ahora.getTime() - i * 864e5), k = dia(d);
+    dias.push([k.slice(8, 10) + '/' + k.slice(5, 7), porDia[k] || 0]);
+  }
+  const conNota = alumnos.filter(a => a.nota !== '');
+  return {
+    alumnos: alumnos, acts: acts, dias: dias,
+    actividades: acts.map(x => [x, media_(notasAct[x]), intentosAct[x]]),
+    niveles: NIVELES.concat([SIN_ACTIVIDAD]).map(n => [n.n, alumnos.filter(a => a.nivel === n).length]),
+    kpis: {
+      intentos: filas.length, nota: media_(conNota.map(a => a.nota)),
+      activos: alumnos.filter(a => a.semana > 0).length, total: alumnos.length,
+      superados: alumnos.reduce((s, a) => s + a.superados, 0), ejercicios: alumnos.reduce((s, a) => s + a.ejercicios, 0),
+      porCorregir: porCorregir
+    }
+  };
+}
+
+function hojaLimpia_(ss, nombre) {
+  let h = ss.getSheetByName(nombre);
+  const nueva = !h;
+  if (nueva) h = ss.insertSheet(nombre);
+  h.getCharts().forEach(c => h.removeChart(c));
+  const f = h.getFilter();
+  if (f) f.remove();
+  h.clear();
+  return { hoja: h, nueva: nueva };
+}
+
+function actualizarPanel() {
+  const ss = SpreadsheetApp.getActive(), tz = ss.getSpreadsheetTimeZone(), ahora = new Date();
+  const r = ss.getSheetByName(HOJA_RESULTADOS), n = r ? r.getLastRow() : 0;
+  const filas = n > 1 ? r.getRange(2, 1, n - 1, COLUMNAS.length).getValues() : [];
+  const hc = ss.getSheetByName(HOJA_CODIGOS);
+  const codigos = hc && hc.getLastRow() > 1
+    ? hc.getRange(2, 1, hc.getLastRow() - 1, 1).getValues().map(x => limpiaCodigo(x[0])).filter(String) : [];
+  const dia = d => Utilities.formatDate(d, tz, 'yyyy-MM-dd');
+  const esMates = f => ES_MATES.test(String(f[2]));
+  const mates = filas.filter(esMates);
+  const P = calculaPanel_(filas.filter(f => !esMates(f)), codigos, ahora, dia);
+  const M = calculaPanel_(mates, codigos, ahora, dia);
+
+  const D = hojaLimpia_(ss, HOJA_DATOS).hoja;
+  datosGraficas_(D, P, 1);
+  datosGraficas_(D, M, 11);
+  D.hideSheet();
+
+  const pp = hojaLimpia_(ss, HOJA_PANEL), pm = hojaLimpia_(ss, HOJA_PANEL_MATES);
+  pintaPanel_(pp.hoja, '📊 Seis actividades diarias · Panel de la clase (español y ciencias)', P, D, 1, ahora, tz);
+  pintaPanel_(pm.hoja, '➗ Matemáticas · Panel de la clase', M, D, 11, ahora, tz);
+  pintaMapa_(hojaLimpia_(ss, HOJA_MAPA).hoja, P);
+
+  // --- Resultados de matemáticas, del más reciente al más antiguo ---
+  const rm = hojaLimpia_(ss, HOJA_RES_MATES), h = rm.hoja;
+  const CAB = ['Fecha', 'Código', 'Actividad', 'Nº', 'Ficha o ejercicio', 'Aciertos', 'Total', 'Nota (%)', 'Nivel', 'Detalle'];
+  h.getRange(1, 1, 1, CAB.length).setValues([CAB]).setFontWeight('bold').setFontColor('#ffffff').setBackground('#1d6fd6');
+  if (mates.length) {
+    const orden = mates.slice().sort((a, b) => (b[0] instanceof Date ? b[0].getTime() : 0) - (a[0] instanceof Date ? a[0].getTime() : 0));
+    h.getRange(2, 2, orden.length, 1).setNumberFormat('@');
+    h.getRange(2, 10, orden.length, 1).setNumberFormat('@');
+    h.getRange(2, 1, orden.length, CAB.length).setValues(orden.map(f => [f[0], limpiaCodigo(f[1]), f[2], f[4], f[5], f[6], f[7], f[8], nivelDe_(Number(f[8]) || 0).n, f[9]]));
+    h.getRange(2, 1, orden.length, 1).setNumberFormat('dd/MM/yyyy HH:mm');
+    h.getRange(2, 9, orden.length, 1).setBackgrounds(orden.map(f => [nivelDe_(Number(f[8]) || 0).fondo]));
+    h.getRange(1, 1, orden.length + 1, CAB.length).createFilter();
+  } else {
+    h.getRange(2, 1).setValue('Todavía no hay resultados de matemáticas.');
+  }
+  h.setFrozenRows(1);
+  h.setColumnWidth(3, 240);
+  h.setColumnWidth(5, 260);
+  h.setColumnWidth(9, 150);
+  h.setColumnWidth(10, 320);
+
+  if (pp.nueva) { ss.setActiveSheet(pp.hoja); ss.moveActiveSheet(1); }
+  if (pm.nueva) { ss.setActiveSheet(pm.hoja); ss.moveActiveSheet(2); }
+  if (rm.nueva) { ss.setActiveSheet(h); ss.moveActiveSheet(3); }
+  if (pp.nueva) ss.setActiveSheet(pp.hoja);
+}
+
+// Datos para las gráficas, en la pestaña oculta. c0 = primera columna que ocupa.
+function datosGraficas_(D, P, c0) {
+  D.getRange(1, c0, 1, 2).setValues([['Nivel', 'Alumnos']]);
+  D.getRange(2, c0, P.niveles.length, 2).setValues(P.niveles);
+  D.getRange(1, c0 + 3, 1, 3).setValues([['Actividad', 'Nota media (%)', 'Intentos']]);
+  if (P.actividades.length) D.getRange(2, c0 + 3, P.actividades.length, 3).setValues(P.actividades);
+  D.getRange(1, c0 + 7, 1, 2).setValues([['Día', 'Intentos']]);
+  D.getRange(2, c0 + 7, P.dias.length, 1).setNumberFormat('@');
+  D.getRange(2, c0 + 7, P.dias.length, 2).setValues(P.dias);
+}
+
+function pintaPanel_(p, titulo, P, D, c0, ahora, tz) {
+  const k = P.kpis;
+  p.getRange('A1').setValue(titulo).setFontSize(18).setFontWeight('bold');
+  p.getRange('A2').setValue('Actualizado el ' + Utilities.formatDate(ahora, tz, 'dd/MM/yyyy') + ' a las ' + Utilities.formatDate(ahora, tz, 'HH:mm') +
+    '. Se actualiza solo al abrir la hoja; también con el menú 📊 Panel → Actualizar el panel.').setFontColor('#5b6476');
+  p.getRange(4, 1, 1, 5).setValues([['Intentos', 'Nota media de la clase', 'Alumnos activos (7 días)', 'Ejercicios superados (≥ 80 %)', 'Textos por corregir']])
+    .setFontColor('#5b6476').setBackground('#f3f5fa').setHorizontalAlignment('center').setWrap(true);
+  p.getRange(5, 1, 1, 5).setNumberFormat('@')
+    .setValues([[k.intentos, k.nota === '' ? '—' : k.nota + ' %', k.activos + ' de ' + k.total, k.superados + ' de ' + k.ejercicios, k.porCorregir]])
+    .setFontSize(22).setFontWeight('bold').setBackground('#f3f5fa').setHorizontalAlignment('center');
+  if (k.nota !== '') p.getRange(5, 2).setFontColor(nivelDe_(k.nota).color);
+  if (k.porCorregir > 0) p.getRange(5, 5).setFontColor('#d62828');
+
+  const CAB = ['Código', 'Nivel', 'Nota media (%)', 'Progreso', 'Intentos', 'Ejercicios distintos', 'Superados (≥ 80 %)',
+    'Intentos esta semana', 'Mejor velocidad lectora', 'Último intento', 'Textos por corregir'];
+  const F0 = 7;
+  p.getRange(F0, 1, 1, CAB.length).setValues([CAB]).setFontWeight('bold').setFontColor('#ffffff').setBackground('#1d6fd6')
+    .setWrap(true).setVerticalAlignment('middle').setHorizontalAlignment('center');
+  const A = P.alumnos;
+  if (A.length) {
+    const barra = a => a.nota === '' ? '' : '█'.repeat(Math.round(a.nota / 10)) + '░'.repeat(10 - Math.round(a.nota / 10));
+    p.getRange(F0 + 1, 1, A.length, 1).setNumberFormat('@');
+    p.getRange(F0 + 1, 1, A.length, CAB.length).setValues(A.map(a => [a.codigo, a.nivel.n, a.nota, barra(a), a.intentos,
+      a.ejercicios, a.superados, a.semana, a.ppm, a.ultimo, a.porCorregir || '']))
+      .setHorizontalAlignment('center').setVerticalAlignment('middle');
+    p.getRange(F0 + 1, 1, A.length, 1).setFontWeight('bold');
+    p.getRange(F0 + 1, 2, A.length, 1).setBackgrounds(A.map(a => [a.nivel.fondo])).setFontWeight('bold').setHorizontalAlignment('left');
+    p.getRange(F0 + 1, 3, A.length, 1).setFontWeight('bold');
+    p.getRange(F0 + 1, 4, A.length, 1).setFontColors(A.map(a => [a.nivel.color])).setHorizontalAlignment('left');
+    p.getRange(F0 + 1, 8, A.length, 1).setFontColors(A.map(a => [a.semana ? '#1d2433' : '#d62828']));
+    p.getRange(F0 + 1, 10, A.length, 1).setNumberFormat('dd/MM/yyyy HH:mm');
+    p.getRange(F0 + 1, 11, A.length, 1).setFontColor('#d62828').setFontWeight('bold');
+    p.getRange(F0, 1, A.length + 1, CAB.length).createFilter();
+  } else {
+    p.getRange(F0 + 1, 1).setValue('Todavía no hay alumnos ni resultados. Escribe los códigos en la pestaña «Códigos».');
+  }
+  const fl = F0 + Math.max(A.length, 1) + 2;
+  p.getRange(fl, 1).setValue('Niveles (nota media del mejor intento de cada ejercicio)').setFontWeight('bold');
+  const ley = NIVELES.map((x, i) => [x.n, (i ? x.min + ' – ' + (NIVELES[i - 1].min - 1) : x.min + ' – 100') + ' %']).concat([[SIN_ACTIVIDAD.n, 'Todavía no ha hecho nada']]);
+  p.getRange(fl + 1, 1, ley.length, 2).setValues(ley);
+  p.getRange(fl + 1, 1, ley.length, 1).setBackgrounds(NIVELES.concat([SIN_ACTIVIDAD]).map(x => [x.fondo]));
+  p.setFrozenRows(0);
+  p.setColumnWidths(1, 5, 150);
+  p.setColumnWidths(6, 6, 125);
+  p.setRowHeight(F0, 42);
+  p.setHiddenGridlines(true);
+
+  const grafica = (tipo, rangos, fila, col, titulo, alto, opciones) => {
+    let g = p.newChart().setChartType(tipo);
+    rangos.forEach(x => { g = g.addRange(x); });
+    g = g.setNumHeaders(1).setPosition(fila, col, 0, 0).setOption('title', titulo).setOption('width', 520).setOption('height', alto);
+    Object.keys(opciones).forEach(o => { g = g.setOption(o, opciones[o]); });
+    p.insertChart(g.build());
+  };
+  const todos = NIVELES.concat([SIN_ACTIVIDAD]);
+  if (A.length) grafica(Charts.ChartType.BAR, [p.getRange(F0, 1, A.length + 1, 1), p.getRange(F0, 3, A.length + 1, 1)], 1, 13,
+    'Nota media por alumno (%)', Math.max(320, 60 + A.length * 22), { legend: { position: 'none' }, colors: ['#1d6fd6'], hAxis: { minValue: 0, maxValue: 100 } });
+  grafica(Charts.ChartType.PIE, [D.getRange(1, c0, P.niveles.length + 1, 2)], 1, 19, 'Niveles de la clase', 300,
+    { pieHole: 0.45, colors: todos.map(x => x.color) });
+  if (P.actividades.length) grafica(Charts.ChartType.COLUMN, [D.getRange(1, c0 + 3, P.actividades.length + 1, 2)], 16, 19,
+    'Nota media por actividad (%)', 300, { legend: { position: 'none' }, colors: ['#2a9d3f'], vAxis: { minValue: 0, maxValue: 100 } });
+  grafica(Charts.ChartType.COLUMN, [D.getRange(1, c0 + 7, P.dias.length + 1, 2)], 31, 19,
+    'Intentos por día (últimos 14 días)', 300, { legend: { position: 'none' }, colors: ['#d9730d'], vAxis: { minValue: 0 } });
+}
+
+function pintaMapa_(m, P) {
+  const A = P.alumnos;
+  m.getRange(1, 1, 1, P.acts.length + 1).setValues([['Código'].concat(P.acts)]).setFontWeight('bold').setFontColor('#ffffff')
+    .setBackground('#1d6fd6').setWrap(true).setHorizontalAlignment('center').setVerticalAlignment('middle');
+  if (A.length) {
+    m.getRange(2, 1, A.length, 1).setNumberFormat('@').setValues(A.map(a => [a.codigo])).setFontWeight('bold');
+    if (P.acts.length) m.getRange(2, 2, A.length, P.acts.length)
+      .setValues(A.map(a => P.acts.map(x => x in a.porAct ? a.porAct[x] : '')))
+      .setBackgrounds(A.map(a => P.acts.map(x => x in a.porAct ? nivelDe_(a.porAct[x]).fondo : '#ffffff')))
+      .setHorizontalAlignment('center');
+  }
+  m.getRange(A.length + 3, 1).setValue('Cada casilla es la nota media (%) del alumno en esa actividad, con su mejor intento de cada ejercicio. En blanco: todavía no la ha hecho.').setFontColor('#5b6476');
+  m.setFrozenRows(1);
+  m.setFrozenColumns(1);
+  m.setRowHeight(1, 60);
+  if (P.acts.length) m.setColumnWidths(2, P.acts.length, 120);
+
+}
 
 function limpiaCodigo(c) { return String(c || '').trim().toUpperCase().slice(0, 12); }
 // Evita que un texto empiece por = + - @ y la hoja lo trate como fórmula.
